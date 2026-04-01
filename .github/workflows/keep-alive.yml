@@ -1,0 +1,15 @@
+name: Keep Render Alive
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render health
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://duns-api-5d5c.onrender.com/health)
+          echo "Health status: $STATUS"
