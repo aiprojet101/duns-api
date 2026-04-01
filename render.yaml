@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: duns-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    branch: main
+    envVars:
+      - key: FRONTEND_URL
+        value: https://dunsfrance.fr
+      - key: EMAIL_FROM
+        value: "DUNS <noreply@dunsfrance.fr>"
+      - key: RESEND_API_KEY
+        sync: false
+    healthCheckPath: /health
