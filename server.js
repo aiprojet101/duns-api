@@ -255,21 +255,20 @@ app.post("/api/lookup-duns", async (req, res) => {
     console.log(`[lookup] found ${results.length} result(s)`);
     await page.close().catch(() => {});
 
-    // Send email via Resend (optional)
-    if (results.length > 0 && email && email.trim() && RESEND_API_KEY) {
+    // Send email via Resend
+    if (email && email.trim() && RESEND_API_KEY) {
       try {
         const resend = new Resend(RESEND_API_KEY);
-        const resultRows = results.map((r, i) => `<tr>
-          <td style="padding:8px;border:1px solid #ddd">${i + 1}</td>
-          <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.name)}</td>
-          <td style="padding:8px;border:1px solid #ddd"><b>${escapeHtml(r.duns)}</b></td>
-          <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.address)}</td>
-        </tr>`).join("");
-        await resend.emails.send({
-          from: EMAIL_FROM,
-          to: email.trim(),
-          subject: `DUNS Lookup : resultats pour "${companyName}"`,
-          html: `<h2>Resultats DUNS pour : ${escapeHtml(companyName)}</h2>
+        let subject, html;
+        if (results.length > 0) {
+          const resultRows = results.map((r, i) => `<tr>
+            <td style="padding:8px;border:1px solid #ddd">${i + 1}</td>
+            <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.name)}</td>
+            <td style="padding:8px;border:1px solid #ddd"><b>${escapeHtml(r.duns)}</b></td>
+            <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.address)}</td>
+          </tr>`).join("");
+          subject = `Votre numéro DUNS pour "${companyName}"`;
+          html = `<h2>Numéro DUNS trouvé pour : ${escapeHtml(companyName)}</h2>
             <table style="border-collapse:collapse;width:100%">
               <thead><tr style="background:#f5f5f5">
                 <th style="padding:8px;border:1px solid #ddd">#</th>
@@ -278,9 +277,17 @@ app.post("/api/lookup-duns", async (req, res) => {
                 <th style="padding:8px;border:1px solid #ddd">Adresse</th>
               </tr></thead>
               <tbody>${resultRows}</tbody>
-            </table>`,
-        });
-        console.log(`[lookup] email sent to ${email}`);
+            </table>`;
+        } else {
+          subject = `Aucun résultat DUNS pour "${companyName}"`;
+          html = `<h2>Aucun numéro DUNS trouvé</h2>
+            <p>Nous n'avons pas trouvé de numéro DUNS pour <strong>${escapeHtml(companyName)}</strong> dans la base Dun &amp; Bradstreet.</p>
+            <p>Conformément à nos CGV, vous serez intégralement remboursé(e) dans les 3 à 5 jours ouvrés.</p>
+            <p>Si vous souhaitez obtenir un numéro DUNS, vous pouvez en faire la demande gratuitement sur <a href="https://www.dnb.com/fr-fr/solutions/duns-number/get-a-duns.html">le site Dun &amp; Bradstreet</a>.</p>
+            <p>Pour toute question, répondez à cet email.</p>`;
+        }
+        await resend.emails.send({ from: EMAIL_FROM, to: email.trim(), subject, html });
+        console.log(`[lookup] email sent to ${email} (found=${results.length > 0})`);
       } catch (mailErr) {
         console.error("[lookup] email send failed:", mailErr.message);
       }
