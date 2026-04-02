@@ -316,6 +316,7 @@ app.post("/api/lookup-duns", async (req, res) => {
     return res.status(500).json({ error: "Lookup failed", details: err.message });
   } finally {
     if (context) await context.close().catch(() => {});
+    if (_browser) { await _browser.close().catch(() => {}); _browser = null; }
   }
 });
 
