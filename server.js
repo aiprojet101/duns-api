@@ -50,6 +50,8 @@ function getBrowserArgs() {
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--window-size=1280,720",
+      "--disable-http2",
+      "--disable-blink-features=AutomationControlled",
     ],
     env: { ...process.env, DISPLAY: display },
   };
