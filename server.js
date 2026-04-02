@@ -24,19 +24,17 @@ app.use(
 let _browser = null;
 
 function getBrowserArgs() {
-  const display = process.env.DISPLAY || ":99";
   return {
-    headless: false,
+    headless: true,
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     args: [
-      `--display=${display}`,
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--window-size=1280,720",
+      "--disable-blink-features=AutomationControlled",
     ],
-    env: { ...process.env, DISPLAY: display },
   };
 }
 
