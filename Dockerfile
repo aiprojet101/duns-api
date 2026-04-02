@@ -12,13 +12,10 @@ COPY package.json ./
 RUN npm install --omit=dev
 RUN npx playwright install chromium
 COPY server.js ./
-COPY start.sh ./
-RUN chmod +x start.sh
 
 ENV PORT=3001
-ENV DISPLAY=:99
 ENV NODE_ENV=production
 
 EXPOSE ${PORT}
 
-CMD ["/bin/sh", "/app/start.sh"]
+CMD ["xvfb-run", "--server-args=-screen 0 1280x720x24 -ac", "node", "server.js"]
