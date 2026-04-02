@@ -2,6 +2,22 @@ const express = require("express");
 const cors = require("cors");
 const { chromium } = require("playwright");
 const { Resend } = require("resend");
+const { spawn } = require("child_process");
+
+// ── Xvfb launcher ─────────────────────────────────────────────────────────────
+const _xvfbReady = new Promise((resolve) => {
+  const xvfb = spawn("Xvfb", [":99", "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"]);
+  xvfb.on("error", (err) => {
+    console.error("[xvfb] spawn failed:", err.message, "— will try headless fallback");
+    resolve();
+  });
+  xvfb.stderr.on("data", () => {}); // suppress noise
+  setTimeout(() => {
+    process.env.DISPLAY = ":99";
+    console.log("[xvfb] display :99 ready");
+    resolve();
+  }, 4000);
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -29,7 +45,6 @@ function getBrowserArgs() {
     headless: false,
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     args: [
-      `--display=${display}`,
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
@@ -41,6 +56,7 @@ function getBrowserArgs() {
 }
 
 async function getBrowser() {
+  await _xvfbReady;
   if (_browser && _browser.isConnected()) return _browser;
   console.log("[browser] launching Chromium...");
   _browser = await chromium.launch(getBrowserArgs());
@@ -317,18 +333,5 @@ app.listen(PORT, async () => {
   console.log(`[server] DISPLAY=${process.env.DISPLAY || "(not set)"}`);
   console.log(`[server] RESEND=${RESEND_API_KEY ? "configured" : "NOT SET"}`);
   console.log(`[server] CORS origin=${FRONTEND_URL}`);
-  // Warm up browser + pre-cache UPIK page
-  getBrowser().then(async (browser) => {
-    try {
-      const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } });
-      const pg = await ctx.newPage();
-      await pg.route(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|woff|woff2|ttf|eot|otf)(\?.*)?$/i, (r) => r.abort());
-      await pg.goto("https://www.dnb.com/de-de/upik.html", { waitUntil: "domcontentloaded", timeout: 60_000 });
-      console.log("[server] UPIK page pre-warmed");
-      await pg.close().catch(() => {});
-      await ctx.close().catch(() => {});
-    } catch (err) {
-      console.error("[server] pre-warm failed:", err.message);
-    }
-  }).catch((err) => console.error("[server] browser warm-up failed:", err.message));
+  console.log("[server] ready — browser will launch on first request");
 });
