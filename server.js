@@ -2,22 +2,6 @@ const express = require("express");
 const cors = require("cors");
 const { chromium } = require("playwright");
 const { Resend } = require("resend");
-const { spawn } = require("child_process");
-
-// ── Xvfb launcher ─────────────────────────────────────────────────────────────
-const _xvfbReady = new Promise((resolve) => {
-  const xvfb = spawn("Xvfb", [":99", "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"]);
-  xvfb.on("error", (err) => {
-    console.error("[xvfb] spawn failed:", err.message, "— will try headless fallback");
-    resolve();
-  });
-  xvfb.stderr.on("data", () => {}); // suppress noise
-  setTimeout(() => {
-    process.env.DISPLAY = ":99";
-    console.log("[xvfb] display :99 ready");
-    resolve();
-  }, 4000);
-});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -45,20 +29,18 @@ function getBrowserArgs() {
     headless: false,
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     args: [
+      `--display=${display}`,
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--window-size=1280,720",
-      "--disable-http2",
-      "--disable-blink-features=AutomationControlled",
     ],
     env: { ...process.env, DISPLAY: display },
   };
 }
 
 async function getBrowser() {
-  await _xvfbReady;
   if (_browser && _browser.isConnected()) return _browser;
   console.log("[browser] launching Chromium...");
   _browser = await chromium.launch(getBrowserArgs());
@@ -273,44 +255,41 @@ app.post("/api/lookup-duns", async (req, res) => {
     console.log(`[lookup] found ${results.length} result(s)`);
     await page.close().catch(() => {});
 
-    const best =
-      results.find((r) => r.name && r.duns && r.address) ||
-      results.find((r) => r.duns) ||
-      null;
-
-    // Send email via Resend
-    if (email && email.trim() && RESEND_API_KEY) {
+    // Send email via Resend (optional)
+    if (results.length > 0 && email && email.trim() && RESEND_API_KEY) {
       try {
         const resend = new Resend(RESEND_API_KEY);
-        let subject, html;
-        if (best) {
-          subject = `Votre numéro DUNS pour "${companyName}"`;
-          html = `<div style="font-family:sans-serif;max-width:480px;margin:0 auto">
-            <h2 style="color:#1a1a1a">Votre numéro DUNS</h2>
-            <p>Bonjour,</p>
-            <p>Voici le résultat de votre recherche pour <strong>${escapeHtml(companyName)}</strong> :</p>
-            <div style="border:1px solid #e0e0e0;border-radius:8px;padding:20px;margin:20px 0;background:#f9f9f9">
-              <p style="margin:0 0 8px"><strong>Entreprise :</strong> ${escapeHtml(best.name || companyName)}</p>
-              <p style="margin:0 0 8px"><strong>Numéro D-U-N-S :</strong> <span style="font-family:monospace;font-size:18px;font-weight:bold;letter-spacing:2px">${escapeHtml(best.duns)}</span></p>
-              ${best.address ? `<p style="margin:0"><strong>Adresse :</strong> ${escapeHtml(best.address)}</p>` : ""}
-            </div>
-            <p style="color:#666;font-size:13px">DUNS France — <a href="https://dunsfrance.fr">dunsfrance.fr</a></p>
-          </div>`;
-        } else {
-          subject = `Aucun résultat DUNS pour "${companyName}"`;
-          html = `<h2>Aucun numéro DUNS trouvé</h2>
-            <p>Nous n'avons pas trouvé de numéro DUNS pour <strong>${escapeHtml(companyName)}</strong> dans la base Dun &amp; Bradstreet.</p>
-            <p>Conformément à nos CGV, vous serez intégralement remboursé(e) dans les 3 à 5 jours ouvrés.</p>
-            <p>Si vous souhaitez obtenir un numéro DUNS, vous pouvez en faire la demande gratuitement sur <a href="https://www.dnb.com/fr-fr/solutions/duns-number/get-a-duns.html">le site Dun &amp; Bradstreet</a>.</p>
-            <p>Pour toute question, répondez à cet email.</p>`;
-        }
-        await resend.emails.send({ from: EMAIL_FROM, to: email.trim(), subject, html });
-        console.log(`[lookup] email sent to ${email} (found=${results.length > 0})`);
+        const resultRows = results.map((r, i) => `<tr>
+          <td style="padding:8px;border:1px solid #ddd">${i + 1}</td>
+          <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.name)}</td>
+          <td style="padding:8px;border:1px solid #ddd"><b>${escapeHtml(r.duns)}</b></td>
+          <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.address)}</td>
+        </tr>`).join("");
+        await resend.emails.send({
+          from: EMAIL_FROM,
+          to: email.trim(),
+          subject: `DUNS Lookup : resultats pour "${companyName}"`,
+          html: `<h2>Resultats DUNS pour : ${escapeHtml(companyName)}</h2>
+            <table style="border-collapse:collapse;width:100%">
+              <thead><tr style="background:#f5f5f5">
+                <th style="padding:8px;border:1px solid #ddd">#</th>
+                <th style="padding:8px;border:1px solid #ddd">Entreprise</th>
+                <th style="padding:8px;border:1px solid #ddd">D-U-N-S</th>
+                <th style="padding:8px;border:1px solid #ddd">Adresse</th>
+              </tr></thead>
+              <tbody>${resultRows}</tbody>
+            </table>`,
+        });
+        console.log(`[lookup] email sent to ${email}`);
       } catch (mailErr) {
         console.error("[lookup] email send failed:", mailErr.message);
       }
     }
 
+    const best =
+      results.find((r) => r.name && r.duns && r.address) ||
+      results.find((r) => r.duns) ||
+      null;
     const data = best
       ? { companyName: best.name || companyName, dunsNumber: best.duns, address: best.address || "" }
       : null;
@@ -338,5 +317,18 @@ app.listen(PORT, async () => {
   console.log(`[server] DISPLAY=${process.env.DISPLAY || "(not set)"}`);
   console.log(`[server] RESEND=${RESEND_API_KEY ? "configured" : "NOT SET"}`);
   console.log(`[server] CORS origin=${FRONTEND_URL}`);
-  console.log("[server] ready — browser will launch on first request");
+  // Warm up browser + pre-cache UPIK page
+  getBrowser().then(async (browser) => {
+    try {
+      const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } });
+      const pg = await ctx.newPage();
+      await pg.route(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|woff|woff2|ttf|eot|otf)(\?.*)?$/i, (r) => r.abort());
+      await pg.goto("https://www.dnb.com/de-de/upik.html", { waitUntil: "domcontentloaded", timeout: 60_000 });
+      console.log("[server] UPIK page pre-warmed");
+      await pg.close().catch(() => {});
+      await ctx.close().catch(() => {});
+    } catch (err) {
+      console.error("[server] pre-warm failed:", err.message);
+    }
+  }).catch((err) => console.error("[server] browser warm-up failed:", err.message));
 });
