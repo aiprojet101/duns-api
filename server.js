@@ -2,6 +2,22 @@ const express = require("express");
 const cors = require("cors");
 const { chromium } = require("playwright");
 const { Resend } = require("resend");
+const { spawn } = require("child_process");
+
+// ── Xvfb launcher ─────────────────────────────────────────────────────────────
+const _xvfbReady = new Promise((resolve) => {
+  const xvfb = spawn("Xvfb", [":99", "-screen", "0", "1280x720x24", "-ac", "-nolisten", "tcp"]);
+  xvfb.on("error", (err) => {
+    console.error("[xvfb] spawn failed:", err.message, "— will try headless fallback");
+    resolve();
+  });
+  xvfb.stderr.on("data", () => {}); // suppress noise
+  setTimeout(() => {
+    process.env.DISPLAY = ":99";
+    console.log("[xvfb] display :99 ready");
+    resolve();
+  }, 4000);
+});
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -24,8 +40,9 @@ app.use(
 let _browser = null;
 
 function getBrowserArgs() {
+  const display = process.env.DISPLAY || ":99";
   return {
-    headless: true,
+    headless: false,
     executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined,
     args: [
       "--no-sandbox",
@@ -33,12 +50,13 @@ function getBrowserArgs() {
       "--disable-dev-shm-usage",
       "--disable-gpu",
       "--window-size=1280,720",
-      "--disable-blink-features=AutomationControlled",
     ],
+    env: { ...process.env, DISPLAY: display },
   };
 }
 
 async function getBrowser() {
+  await _xvfbReady;
   if (_browser && _browser.isConnected()) return _browser;
   console.log("[browser] launching Chromium...");
   _browser = await chromium.launch(getBrowserArgs());
