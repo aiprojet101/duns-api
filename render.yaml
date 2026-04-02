@@ -11,4 +11,3 @@ services:
         value: "DUNS <noreply@dunsfrance.fr>"
       - key: RESEND_API_KEY
         sync: false
-    healthCheckPath: /health

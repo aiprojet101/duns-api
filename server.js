@@ -320,18 +320,5 @@ app.listen(PORT, async () => {
   console.log(`[server] DISPLAY=${process.env.DISPLAY || "(not set)"}`);
   console.log(`[server] RESEND=${RESEND_API_KEY ? "configured" : "NOT SET"}`);
   console.log(`[server] CORS origin=${FRONTEND_URL}`);
-  // Warm up browser + pre-cache UPIK page
-  getBrowser().then(async (browser) => {
-    try {
-      const ctx = await browser.newContext({ viewport: { width: 800, height: 600 } });
-      const pg = await ctx.newPage();
-      await pg.route(/\.(png|jpg|jpeg|gif|svg|webp|ico|css|woff|woff2|ttf|eot|otf)(\?.*)?$/i, (r) => r.abort());
-      await pg.goto("https://www.dnb.com/de-de/upik.html", { waitUntil: "domcontentloaded", timeout: 60_000 });
-      console.log("[server] UPIK page pre-warmed");
-      await pg.close().catch(() => {});
-      await ctx.close().catch(() => {});
-    } catch (err) {
-      console.error("[server] pre-warm failed:", err.message);
-    }
-  }).catch((err) => console.error("[server] browser warm-up failed:", err.message));
+  console.log("[server] ready — browser will launch on first request");
 });
