@@ -281,10 +281,12 @@ app.post("/api/lookup-duns", async (req, res) => {
           <td style="padding:8px;border:1px solid #ddd"><b>${escapeHtml(r.duns)}</b></td>
           <td style="padding:8px;border:1px solid #ddd">${escapeHtml(r.address)}</td>
         </tr>`).join("");
+        const firstResult = results[0];
         await resend.emails.send({
           from: EMAIL_FROM,
           to: email.trim(),
           subject: `Votre numéro DUNS — ${escapeHtml(companyName)}`,
+          text: `Votre numéro D-U-N-S\n\nEntreprise : ${firstResult.name}\nD-U-N-S : ${firstResult.duns}\nAdresse : ${firstResult.address}\n\nFaire une nouvelle recherche : https://dunsfrance.fr\n\nDunsFrance.fr — Service indépendant, non affilié à Dun & Bradstreet`,
           html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px">
             <h2 style="color:#1E3A5F">Votre numéro D-U-N-S</h2>
             <p style="color:#555">Résultat de la recherche pour : <strong>${escapeHtml(companyName)}</strong></p>
