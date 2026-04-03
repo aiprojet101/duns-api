@@ -284,17 +284,29 @@ app.post("/api/lookup-duns", async (req, res) => {
         await resend.emails.send({
           from: EMAIL_FROM,
           to: email.trim(),
-          subject: `DUNS Lookup : resultats pour "${companyName}"`,
-          html: `<h2>Resultats DUNS pour : ${escapeHtml(companyName)}</h2>
-            <table style="border-collapse:collapse;width:100%">
+          subject: `Votre numéro DUNS — ${escapeHtml(companyName)}`,
+          html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px">
+            <h2 style="color:#1E3A5F">Votre numéro D-U-N-S</h2>
+            <p style="color:#555">Résultat de la recherche pour : <strong>${escapeHtml(companyName)}</strong></p>
+            <table style="border-collapse:collapse;width:100%;margin:16px 0">
               <thead><tr style="background:#f5f5f5">
-                <th style="padding:8px;border:1px solid #ddd">#</th>
-                <th style="padding:8px;border:1px solid #ddd">Entreprise</th>
-                <th style="padding:8px;border:1px solid #ddd">D-U-N-S</th>
-                <th style="padding:8px;border:1px solid #ddd">Adresse</th>
+                <th style="padding:10px;border:1px solid #ddd;text-align:left">Entreprise</th>
+                <th style="padding:10px;border:1px solid #ddd;text-align:left">D-U-N-S</th>
+                <th style="padding:10px;border:1px solid #ddd;text-align:left">Adresse</th>
               </tr></thead>
-              <tbody>${resultRows}</tbody>
-            </table>`,
+              <tbody>${results.map(r => `<tr>
+                <td style="padding:10px;border:1px solid #ddd">${escapeHtml(r.name)}</td>
+                <td style="padding:10px;border:1px solid #ddd"><strong style="color:#1E3A5F">${escapeHtml(r.duns)}</strong></td>
+                <td style="padding:10px;border:1px solid #ddd">${escapeHtml(r.address)}</td>
+              </tr>`).join("")}</tbody>
+            </table>
+            <div style="text-align:center;margin-top:24px">
+              <a href="https://dunsfrance.fr" style="background:#1E3A5F;color:#fff;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold">
+                Faire une nouvelle recherche
+              </a>
+            </div>
+            <p style="color:#aaa;font-size:12px;margin-top:24px;text-align:center">DunsFrance.fr — Service indépendant, non affilié à Dun &amp; Bradstreet</p>
+          </div>`,
         });
         console.log(`[lookup] email sent to ${email}`);
       } catch (mailErr) {
