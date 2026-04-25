@@ -297,6 +297,67 @@ app.post("/api/lookup-duns", async (req, res) => {
             </table>`,
         });
         console.log(`[lookup] email sent to ${email}`);
+
+        // Schedule post-purchase follow-up sequence
+        if (process.env.DISABLE_FOLLOWUP_EMAILS !== 'true') {
+          const best = results.find((r) => r.name && r.duns) || results[0];
+          const foundDuns = best?.duns || "";
+          const foundName = best?.name || companyName;
+          const unsubscribe = `<p style="font-size:11px;color:#888;margin-top:24px;border-top:1px solid #eee;padding-top:12px">Pour ne plus recevoir ces emails, repondez avec STOP.</p>`;
+
+          // Email 2 — D+7 cross-sell papiers-entreprise.fr
+          try {
+            const scheduledAt2 = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+            await resend.emails.send({
+              from: EMAIL_FROM,
+              to: email.trim(),
+              scheduledAt: scheduledAt2,
+              subject: "Vos autres documents administratifs en quelques minutes",
+              html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;line-height:1.5">
+                <h2 style="color:#0a3d62">Besoin d'autres documents pour ${escapeHtml(foundName)} ?</h2>
+                <p>Bonjour,</p>
+                <p>Vous avez recemment recupere votre numero <b>D-U-N-S</b> via DunsFrance.fr. Au-dela du DUNS, votre entreprise a souvent besoin d'autres justificatifs administratifs : <b>Kbis, TVA intracommunautaire, SIRET, EORI, bilans</b>.</p>
+                <p>Notre service partenaire <b>Papiers Entreprise</b> reunit tous ces documents en un seul endroit, recuperables en quelques minutes.</p>
+                <p style="text-align:center;margin:28px 0">
+                  <a href="https://papiers-entreprise.fr" style="background:#0a3d62;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:bold">Decouvrir le Pack Complet - 5,90 EUR</a>
+                </p>
+                <p style="font-size:12px;color:#666"><i>DunsFrance.fr et Papiers Entreprise sont deux services independants complementaires.</i></p>
+                ${unsubscribe}
+              </div>`,
+            });
+            console.log(`[email] follow-up #2 scheduled for ${email}`);
+          } catch (followErr2) {
+            console.error("[email] follow-up #2 schedule failed:", followErr2.message);
+          }
+
+          // Email 3 — D+335 annual reminder
+          try {
+            const scheduledAt3 = new Date(Date.now() + 335 * 24 * 60 * 60 * 1000).toISOString();
+            await resend.emails.send({
+              from: EMAIL_FROM,
+              to: email.trim(),
+              scheduledAt: scheduledAt3,
+              subject: "Verifiez que le numero DUNS de votre entreprise est toujours a jour",
+              html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;line-height:1.5">
+                <h2 style="color:#0a3d62">Votre DUNS est-il toujours a jour ?</h2>
+                <p>Bonjour,</p>
+                <p>Il y a presque un an, vous avez recupere via DunsFrance.fr le numero D-U-N-S suivant :</p>
+                <p style="background:#f5f5f5;padding:12px;border-left:4px solid #0a3d62;font-size:16px">
+                  <b>${escapeHtml(foundName)}</b><br>
+                  D-U-N-S : <b>${escapeHtml(foundDuns)}</b>
+                </p>
+                <p>Dun &amp; Bradstreet met regulierement a jour les fiches entreprise. <b>Adresse, capital, dirigeants, effectifs</b> peuvent avoir change. Beaucoup de plateformes (Apple, Google, appels d'offres, donneurs d'ordres) exigent un DUNS a jour.</p>
+                <p style="text-align:center;margin:28px 0">
+                  <a href="https://dunsfrance.fr" style="background:#0a3d62;color:#fff;padding:12px 24px;text-decoration:none;border-radius:6px;display:inline-block;font-weight:bold">Verifier votre DUNS - 3,90 EUR</a>
+                </p>
+                ${unsubscribe}
+              </div>`,
+            });
+            console.log(`[email] follow-up #3 scheduled for ${email}`);
+          } catch (followErr3) {
+            console.error("[email] follow-up #3 schedule failed:", followErr3.message);
+          }
+        }
       } catch (mailErr) {
         console.error("[lookup] email send failed:", mailErr.message);
       }
