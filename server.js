@@ -25,6 +25,106 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || "DUNS Lookup <noreply@yourdomain.com>";
 const FRONTEND_URL = process.env.FRONTEND_URL || "*";
 
+// ── Free lookup methods (tried before the Playwright/UPIK scrape) ─────────────
+// dnb.com/upik est desormais protege par un challenge Cloudflare que Playwright
+// ne passe plus de facon fiable. On tente d'abord ces sources gratuites qui ne
+// necessitent pas de navigateur, avant de retomber sur UPIK en dernier recours.
+
+// Le formulaire UPIK utilise des libelles pays en allemand (cf mapping cote Next.js)
+const COUNTRY_DE_TO_EN = {
+  "Frankreich": "France", "Deutschland": "Germany", "Belgien": "Belgium",
+  "Schweiz": "Switzerland", "Spanien": "Spain", "Italien": "Italy",
+  "Grossbritannien": "United Kingdom", "Vereinigte Staaten von Amerika": "United States",
+  "Kanada": "Canada", "Niederlande": "Netherlands", "Luxemburg": "Luxembourg",
+  "Portugal": "Portugal", "Osterreich": "Austria", "Polen": "Poland",
+  "Schweden": "Sweden", "Danemark": "Denmark", "Finnland": "Finland",
+  "Norwegen": "Norway", "Irland": "Ireland", "Marokko": "Morocco",
+  "Tunesien": "Tunisia", "Algerien": "Algeria", "Senegal": "Senegal",
+};
+const COUNTRY_DE_TO_JURISDICTION = {
+  "Frankreich": "fr", "Deutschland": "de", "Belgien": "be", "Schweiz": "ch",
+};
+
+// Extraction stricte : seulement si explicitement labellise DUNS (evite les faux positifs
+// sur des sources non-officielles comme DuckDuckGo ou Opencorporates)
+function extractDunsStrict(text, label = "") {
+  const mFmt = text.match(/\b(\d{2})-(\d{3})-(\d{4})\b/);
+  if (mFmt) {
+    const d = mFmt[1] + mFmt[2] + mFmt[3];
+    if (label) console.log(`[free:${label}] format xx-xxx-xxxx: ${d}`);
+    return d;
+  }
+  const mJson = text.match(/"duns(?:Number|Code)?"\s*[:\s]+["\s]*(\d{9})(?!\d)/i);
+  if (mJson) {
+    if (label) console.log(`[free:${label}] cle JSON duns: ${mJson[1]}`);
+    return mJson[1];
+  }
+  const mLabel = text.match(/[Dd][-.\s]?[Uu][-.\s]?[Nn][-.\s]?[Ss][^0-9]{0,50}(\d{9})(?!\d)/);
+  if (mLabel) {
+    if (label) console.log(`[free:${label}] label DUNS avant: ${mLabel[1]}`);
+    return mLabel[1];
+  }
+  const mAfter = text.match(/(?<!\d)(\d{9})(?!\d)[^a-zA-Z0-9]{0,20}[Dd][-.\s]?[Uu][-.\s]?[Nn][-.\s]?[Ss]/);
+  if (mAfter) {
+    if (label) console.log(`[free:${label}] label DUNS apres: ${mAfter[1]}`);
+    return mAfter[1];
+  }
+  return null;
+}
+
+async function lookupFree(companyName, countryDe) {
+  const countryEn = COUNTRY_DE_TO_EN[countryDe] || countryDe;
+
+  // Methode 1 : API D&B directe (endpoint JSON public de dnb.com, distinct du site UPIK)
+  try {
+    const apiUrl = `https://www.dnb.com/api/v1/search?searchTerm=${encodeURIComponent(companyName)}&country=${encodeURIComponent(countryEn)}&pageNumber=1&pageSize=5`;
+    const res = await fetch(apiUrl, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json",
+        "Referer": "https://www.dnb.com/",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const data = await res.json();
+      const duns = extractDunsStrict(JSON.stringify(data), "API-DNB");
+      if (duns) return { duns, name: companyName };
+    }
+  } catch (e) { console.error("[free] API D&B:", e.message); }
+
+  // Methode 2 : DuckDuckGo (HTML, sans JS)
+  try {
+    const query = `"${companyName}" ${countryEn} DUNS number`;
+    const res = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Accept": "text/html",
+      },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (res.ok) {
+      const html = await res.text();
+      const duns = extractDunsStrict(html, "DuckDuckGo");
+      if (duns) return { duns, name: companyName };
+    }
+  } catch (e) { console.error("[free] DuckDuckGo:", e.message); }
+
+  // Methode 3 : Opencorporates (registres officiels, ne couvre que quelques juridictions)
+  try {
+    const jurisd = COUNTRY_DE_TO_JURISDICTION[countryDe] || "";
+    const url = `https://api.opencorporates.com/v0.4/companies/search?q=${encodeURIComponent(companyName)}${jurisd ? "&jurisdiction_code=" + jurisd : ""}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (res.ok) {
+      const data = await res.json();
+      const duns = extractDunsStrict(JSON.stringify(data), "Opencorporates");
+      if (duns) return { duns, name: companyName };
+    }
+  } catch (e) { console.error("[free] Opencorporates:", e.message); }
+
+  return null;
+}
+
 // ── Middleware ────────────────────────────────────────────────────────────────
 
 app.use(express.json());
@@ -85,9 +185,21 @@ app.post("/api/lookup-duns", async (req, res) => {
 
   console.log(`[lookup] company="${companyName}" city="${city}" country="${country}" email="${email || "(none)"}"`);
 
+  // Tenter d'abord les sources gratuites (rapides, pas de navigateur, pas bloquees
+  // par le Cloudflare d'UPIK) avant de retomber sur le scraping Playwright.
+  let results = [];
+  try {
+    const free = await lookupFree(companyName, country);
+    if (free) {
+      console.log(`[lookup] trouve via methode gratuite: ${free.duns}`);
+      results = [{ name: free.name, duns: free.duns, address: "" }];
+    }
+  } catch (e) { console.error("[lookup] lookupFree erreur:", e.message); }
+
   let context = null;
 
   try {
+    if (results.length === 0) {
     const browser = await getBrowser();
 
     context = await browser.newContext({
@@ -185,7 +297,7 @@ app.post("/api/lookup-duns", async (req, res) => {
     ).catch(() => console.log("[lookup] result wait timed out — extracting anyway"));
 
     // Extract results
-    const results = await page.evaluate(() => {
+    results = await page.evaluate(() => {
       const NAV_NOISE = /UPIK|Plattform|D&B|Was ist|Suche\s*(l.schen|hier)|Datenschutz|Impressum|Cookie|Hinweis|Suchergebnis/i;
 
       let searchRoot = document.body;
@@ -270,6 +382,7 @@ app.post("/api/lookup-duns", async (req, res) => {
 
     console.log(`[lookup] found ${results.length} result(s)`);
     await page.close().catch(() => {});
+    } // fin du bloc Playwright (skippe si trouve via methode gratuite)
 
     // Send email via Resend (optional)
     if (results.length > 0 && email && email.trim() && RESEND_API_KEY) {
