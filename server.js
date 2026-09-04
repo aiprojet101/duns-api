@@ -24,6 +24,87 @@ const PORT = process.env.PORT || 3001;
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
 const EMAIL_FROM = process.env.EMAIL_FROM || "DUNS Lookup <noreply@yourdomain.com>";
 const FRONTEND_URL = process.env.FRONTEND_URL || "*";
+const SCRAPINGBEE_KEY = process.env.SCRAPINGBEE_KEY;
+
+// ── ScrapingBee (methode principale) ───────────────────────────────────────────
+// dnb.com/upik est protege par un challenge Cloudflare que ni Playwright ni un
+// fetch classique ne passent. ScrapingBee (stealth_proxy) le franchit de facon
+// fiable : teste et valide le 2026-09-04 sur un vrai formulaire UPIK.
+const COUNTRY_DE_TO_ISO = {
+  "Frankreich": "FR", "Deutschland": "DE", "Belgien": "BE", "Schweiz": "CH",
+  "Spanien": "ES", "Italien": "IT", "Grossbritannien": "GB",
+  "Vereinigte Staaten von Amerika": "US", "Kanada": "CA", "Niederlande": "NL",
+  "Luxemburg": "LU", "Portugal": "PT", "Osterreich": "AT", "Polen": "PL",
+  "Schweden": "SE", "Danemark": "DK", "Finnland": "FI", "Norwegen": "NO",
+  "Irland": "IE", "Marokko": "MA", "Tunesien": "TN", "Algerien": "DZ", "Senegal": "SN",
+};
+
+async function lookupViaScrapingBee(companyName, city, countryDe) {
+  if (!SCRAPINGBEE_KEY) return null;
+  const countryCode = COUNTRY_DE_TO_ISO[countryDe] || "FR";
+  const cNameEsc = companyName.replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+
+  const jsScenario = {
+    instructions: [
+      { wait: 3000 },
+      { evaluate: `(function(){
+          var inp = document.querySelector('input[placeholder="Suche hier..."]');
+          if (!inp) return;
+          var setVal = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+          setVal.call(inp, '${cNameEsc}');
+          inp.dispatchEvent(new Event('input', { bubbles: true }));
+          var sel = document.querySelector('#country');
+          if (sel) {
+            var setSel = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+            setSel.call(sel, '${countryCode}');
+            sel.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        })()` },
+      { wait: 500 },
+      { evaluate: `document.querySelector('button[type="submit"]').click()` },
+      { wait: 5000 },
+    ],
+  };
+
+  const url = new URL("https://app.scrapingbee.com/api/v1/");
+  url.searchParams.set("api_key", SCRAPINGBEE_KEY);
+  url.searchParams.set("url", "https://www.dnb.com/de-de/upik.html");
+  url.searchParams.set("stealth_proxy", "true");
+  url.searchParams.set("js_scenario", JSON.stringify(jsScenario));
+
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(90000) });
+    if (!res.ok) {
+      console.error("[scrapingbee] HTTP", res.status, (await res.text()).slice(0, 200));
+      return null;
+    }
+    const html = await res.text();
+
+    // Reduit le HTML a un texte ligne-par-ligne, dans le meme ordre que le DOM
+    // (equivalent grossier de innerText, suffisant pour cette structure connue).
+    const text = html.replace(/<[^>]+>/g, "\n").replace(/\n+/g, "\n");
+    const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+
+    const results = [];
+    for (let i = 0; i < lines.length; i++) {
+      const m = lines[i].match(/D-U-N-S[^:]*:\s*([\d][\d\s-]{6,10}[\d])/i);
+      if (!m) continue;
+      const duns = m[1].replace(/[\s-]/g, "");
+      if (duns.length !== 9) continue;
+      const name = lines[i - 1] || companyName;
+      let address = "";
+      if (/Unternehmensadresse/i.test(lines[i + 1] || "")) {
+        address = lines[i + 2] || "";
+      }
+      results.push({ name, duns, address });
+    }
+    console.log(`[scrapingbee] ${results.length} resultat(s) pour "${companyName}"`);
+    return results;
+  } catch (e) {
+    console.error("[scrapingbee] erreur:", e.message);
+    return null;
+  }
+}
 
 // ── Free lookup methods (tried before the Playwright/UPIK scrape) ─────────────
 // dnb.com/upik est desormais protege par un challenge Cloudflare que Playwright
@@ -185,16 +266,26 @@ app.post("/api/lookup-duns", async (req, res) => {
 
   console.log(`[lookup] company="${companyName}" city="${city}" country="${country}" email="${email || "(none)"}"`);
 
-  // Tenter d'abord les sources gratuites (rapides, pas de navigateur, pas bloquees
-  // par le Cloudflare d'UPIK) avant de retomber sur le scraping Playwright.
+  // Methode principale : ScrapingBee (contourne le Cloudflare d'UPIK)
   let results = [];
   try {
-    const free = await lookupFree(companyName, country);
-    if (free) {
-      console.log(`[lookup] trouve via methode gratuite: ${free.duns}`);
-      results = [{ name: free.name, duns: free.duns, address: "" }];
+    const sbResults = await lookupViaScrapingBee(companyName, city, country);
+    if (sbResults && sbResults.length > 0) {
+      results = sbResults;
     }
-  } catch (e) { console.error("[lookup] lookupFree erreur:", e.message); }
+  } catch (e) { console.error("[lookup] ScrapingBee erreur:", e.message); }
+
+  // Sinon, sources gratuites (rapides, pas de navigateur) avant de retomber
+  // sur le scraping Playwright en tout dernier recours.
+  if (results.length === 0) {
+    try {
+      const free = await lookupFree(companyName, country);
+      if (free) {
+        console.log(`[lookup] trouve via methode gratuite: ${free.duns}`);
+        results = [{ name: free.name, duns: free.duns, address: "" }];
+      }
+    } catch (e) { console.error("[lookup] lookupFree erreur:", e.message); }
+  }
 
   let context = null;
 
