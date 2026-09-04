@@ -266,18 +266,23 @@ app.post("/api/lookup-duns", async (req, res) => {
 
   console.log(`[lookup] company="${companyName}" city="${city}" country="${country}" email="${email || "(none)"}"`);
 
-  // Methode principale : ScrapingBee (contourne le Cloudflare d'UPIK)
+  // Methode principale : ScrapingBee (contourne le Cloudflare d'UPIK). Si ScrapingBee
+  // a reussi a interroger UPIK (meme avec 0 resultat), on fait confiance a cette
+  // reponse plutot que de retomber sur Playwright, qui de toute facon se heurte au
+  // meme Cloudflare et ne ferait que transformer un "non trouve" legitime en erreur.
   let results = [];
+  let sbRan = false;
   try {
     const sbResults = await lookupViaScrapingBee(companyName, city, country);
-    if (sbResults && sbResults.length > 0) {
+    if (sbResults !== null) {
+      sbRan = true;
       results = sbResults;
     }
   } catch (e) { console.error("[lookup] ScrapingBee erreur:", e.message); }
 
-  // Sinon, sources gratuites (rapides, pas de navigateur) avant de retomber
-  // sur le scraping Playwright en tout dernier recours.
-  if (results.length === 0) {
+  // Sinon (ScrapingBee non configure ou en echec), sources gratuites avant de
+  // retomber sur le scraping Playwright en tout dernier recours.
+  if (!sbRan && results.length === 0) {
     try {
       const free = await lookupFree(companyName, country);
       if (free) {
@@ -290,7 +295,7 @@ app.post("/api/lookup-duns", async (req, res) => {
   let context = null;
 
   try {
-    if (results.length === 0) {
+    if (!sbRan && results.length === 0) {
     const browser = await getBrowser();
 
     context = await browser.newContext({
